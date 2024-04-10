@@ -73,6 +73,8 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Vector;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -111,6 +113,9 @@ public class Scanner implements Runnable {
     private static final Logger LOGGER = LogManager.getLogger(Scanner.class);
     private static DecimalFormat decimalFormat = new java.text.DecimalFormat("###0.###");
 
+    private ReentrantLock pauseLock = new ReentrantLock();
+    private Condition pausedCondition = pauseLock.newCondition();
+
     private Vector<ScannerListener> listenerList = new Vector<>();
 
     // ZAP: Added a list of scannerhooks
@@ -132,7 +137,7 @@ public class Scanner implements Runnable {
     private int id;
 
     // ZAP: Added scanner pause option
-    private boolean pause = false;
+    private volatile boolean pause = false;
 
     private List<HostProcess> hostProcesses = new ArrayList<>();
 
@@ -211,6 +216,10 @@ public class Scanner implements Runnable {
     }
 
     public void stop() {
+        if (this.pause) {
+            this.resume();
+        }
+
         if (!isStop) {
             LOGGER.info("scanner stopped");
 
@@ -456,15 +465,30 @@ public class Scanner implements Runnable {
 
     // ZAP: support pause and notify parent
     public void pause() {
-        this.pause = true;
-        ActiveScanEventPublisher.publishScanEvent(
-                ScanEventPublisher.SCAN_PAUSED_EVENT, this.getId());
+        pause = true;
+        pauseLock.lock();
+        try {
+            while (pause) {
+                pausedCondition.await();
+            }
+            ActiveScanEventPublisher.publishScanEvent(
+                    ScanEventPublisher.SCAN_PAUSED_EVENT, this.getId());
+        } catch (InterruptedException e) {
+        } finally {
+            pauseLock.unlock();
+        }
     }
 
     public void resume() {
-        this.pause = false;
-        ActiveScanEventPublisher.publishScanEvent(
-                ScanEventPublisher.SCAN_RESUMED_EVENT, this.getId());
+        pause = false;
+        pauseLock.lock();
+        try {
+            pausedCondition.signalAll();
+            ActiveScanEventPublisher.publishScanEvent(
+                    ScanEventPublisher.SCAN_RESUMED_EVENT, this.getId());
+        } finally {
+            pauseLock.unlock();
+        }
     }
 
     public boolean isPaused() {

@@ -810,6 +810,14 @@ public abstract class AbstractPlugin implements Plugin, Comparable<Object> {
         return parent.isStop() || parent.isSkipped(this);
     }
 
+    public void handlePause() {
+        while (parent.isPaused()) {
+            if (isStop()) {
+                parent.stop();
+            }
+        }
+    }
+
     @Override
     public boolean isEnabled() {
         return enabled;
